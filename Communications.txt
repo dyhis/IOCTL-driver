@@ -1,0 +1,120 @@
+#pragma once
+
+#include <Windows.h>
+#include <Winioctl.h>
+#include <TlHelp32.h>
+#include <cstdint>
+#include <string>
+#include <iostream>
+
+#define code_read CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1645, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
+#define code_base CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1646, METHOD_BUFFERED, FILE_SPECIAL_ACCESS)
+
+
+typedef struct read_struct 
+{
+	INT32 process_id;
+	ULONGLONG address;
+	ULONGLONG buffer;
+	ULONGLONG size;
+	BOOLEAN write;
+};
+
+typedef struct base_struct 
+{
+	INT32 process_id;
+	ULONGLONG* address;
+};
+
+class Ioctl
+{
+private:
+	HANDLE driver_handle;
+	INT32 process_id;
+
+public:
+	uint64_t base;
+	__int64 va_text;
+	bool request_connect()
+	{
+		driver_handle = CreateFileW((L"\\\\.\\\{83463468523542222}"), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+
+		if (!driver_handle || (driver_handle == INVALID_HANDLE_VALUE))
+			return false;
+
+		return true;
+	}
+
+	void read_buffer(PVOID address, PVOID buffer, DWORD size) {
+		read_struct arguments = { 0 };
+
+		arguments.address = (ULONGLONG)address;
+		arguments.buffer = (ULONGLONG)buffer;
+		arguments.size = size;
+		arguments.process_id = process_id;
+		arguments.write = FALSE;
+
+		DeviceIoControl(driver_handle, code_read, &arguments, sizeof(arguments), nullptr, NULL, NULL, NULL);
+	}
+
+	void write_buffer(PVOID address, PVOID buffer, DWORD size) 
+	{
+		read_struct arguments = { 0 };
+
+		arguments.address = (ULONGLONG)address;
+		arguments.buffer = (ULONGLONG)buffer;
+		arguments.size = size;
+		arguments.process_id = process_id;
+		arguments.write = TRUE;
+
+		DeviceIoControl(driver_handle, code_base, &arguments, sizeof(arguments), nullptr, NULL, NULL, NULL);
+	}
+
+	uintptr_t request_base()
+	{
+		uintptr_t rax;
+
+		base_struct arguments = { NULL };
+
+		arguments.process_id = process_id;
+
+		arguments.address = (ULONGLONG*)&rax;
+
+		DeviceIoControl(driver_handle, code_base, &arguments, sizeof(arguments), nullptr, NULL, NULL, NULL);
+
+		return rax;
+	}
+
+
+	void attach(std::string process_name)
+	{
+		PROCESSENTRY32 pt;
+		HANDLE hsnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+		pt.dwSize = sizeof(PROCESSENTRY32);
+		if (Process32First(hsnap, &pt)) {
+			do {
+				if (!lstrcmpi(pt.szExeFile, (LPCSTR)process_name.c_str())) {
+					CloseHandle(hsnap);
+					process_id = pt.th32ProcessID;
+				}
+			} while (Process32Next(hsnap, &pt));
+		}
+		CloseHandle(hsnap);
+	}
+};
+inline std::unique_ptr<Ioctl> communication = std::make_unique<Ioctl>();
+
+template <typename T>
+T read(uint64_t address) 
+{
+	T rax{ };
+	communication->read_buffer((PVOID)address, &rax, sizeof(T));
+	return rax;
+}
+
+template <typename T>
+T write(uint64_t address, T buffer) 
+{
+	communication->write_buffer((PVOID)address, &buffer, sizeof(T));
+	return buffer;
+}
